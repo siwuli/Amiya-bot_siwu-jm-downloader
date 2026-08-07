@@ -1,0 +1,25 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "required": [],
+  "properties": {
+    "jm_enabled": {
+      "title": "启用插件",
+      "description": "总开关。关闭后「找本」指令不响应。",
+      "type": "boolean",
+      "default": true
+    },
+    "jm_zip_password_enabled": {
+      "title": "压缩包添加密码",
+      "description": "开启后导出的 zip 会加密。未填写下方自定义密码时，默认使用本子编号作为密码。",
+      "type": "boolean",
+      "default": false
+    },
+    "jm_zip_password": {
+      "title": "压缩包密码",
+      "description": "自定义密码。开启「压缩包添加密码」且此处留空时，使用当前本子编号（如 350234）。",
+      "type": "string",
+      "default": ""
+    }
+  }
+}

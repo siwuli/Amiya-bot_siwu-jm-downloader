@@ -1,5 +1,6 @@
 import os
 import re
+import sys
 import shutil
 import asyncio
 
@@ -9,6 +10,10 @@ from core import AmiyaBotPluginInstance, Chain, Message, log
 from core.util import create_dir
 
 curr_dir = os.path.dirname(__file__)
+# Amiya-Bot 以包形式加载插件时，sys.path 只含 plugins 父目录，
+# 需要把插件目录本身加进来，才能 import 自带的 jmcomic / Cryptodome / pyzipper
+if curr_dir not in sys.path:
+    sys.path.insert(0, curr_dir)
 download_root = os.path.abspath(os.path.join(curr_dir, '..', '..', 'download', 'jmcomic'))
 
 bot = AmiyaBotPluginInstance(
@@ -170,7 +175,7 @@ async def send_zip_file(data: Message, zip_path: str):
         if kind == 'comwechat':
             return send_via_comwechat(data, zip_path)
     except Exception as e:
-        log.exception(e)
+        log.error(f'发送文件时出错了: {e}')
         return Chain(data).text(
             f'博士，发送文件时出错了：{e}\n文件已保存到：{zip_path}'
         )
@@ -222,7 +227,7 @@ async def send_via_qq_group(data: Message, zip_path: str):
         else:
             await api.post_group_message(data.channel_openid, payload)
     except Exception as e:
-        log.exception(e)
+        log.error(f'QQ 群发送文件失败: {e}')
         return Chain(data).text(f'博士，QQ 群发送文件失败：{e}')
 
     return None
@@ -324,7 +329,7 @@ async def _(data: Message):
     try:
         result = await download_and_pack(album_id, status_cb=status, zip_password=zip_password)
     except Exception as e:
-        log.exception(e)
+        log.error(f'下载 JM{album_id} 失败: {e}')
         return Chain(data).text(f'博士，下载 JM{album_id} 失败了：{e}')
 
     zip_path = result['zip_path']

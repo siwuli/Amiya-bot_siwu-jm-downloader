@@ -18,7 +18,7 @@ download_root = os.path.abspath(os.path.join(curr_dir, '..', '..', 'download', '
 
 bot = AmiyaBotPluginInstance(
     name='JM漫画下载',
-    version='1.1.1',
+    version='1.1.2',
     plugin_id='siwu-jm-downloader',
     plugin_type='functional',
     description='通过输入 JM 编号（如 350234）下载禁漫本子，并打包为压缩包发送',
@@ -186,6 +186,44 @@ async def send_zip_file(data: Message, zip_path: str):
     )
 
 
+def send_result_error(result) -> Optional[str]:
+    """检查 Message.send 的返回值，返回发送失败原因；发送成功则返回 None。"""
+    if not result:
+        return None
+
+    callbacks = result if isinstance(result, list) else [result]
+    for callback in callbacks:
+        response = getattr(callback, 'response', None)
+        if response is None:
+            continue
+
+        # 网络层错误
+        if getattr(response, 'error', None):
+            return f'网络错误：{response.error}'
+
+        body = getattr(response, 'json', None)
+        if not isinstance(body, dict):
+            continue
+
+        status = str(body.get('status', '')).lower()
+        retcode = body.get('retcode')
+        code = body.get('code')
+
+        if status in ('failed', 'error'):
+            failed = True
+        elif retcode not in (None, 0) or code not in (None, 0):
+            # 非 0 的 retcode/code；状态为 async 时说明已入队，不视为失败
+            failed = status != 'async'
+        else:
+            failed = False
+
+        if failed:
+            msg = body.get('message') or body.get('msg') or body.get('wording') or ''
+            return str(msg) or f'status={status} retcode={retcode} code={code}'
+
+    return None
+
+
 async def send_via_qq_group(data: Message, zip_path: str):
     """QQ 群通道：上传文件获得 file_info，再用富媒体消息发送"""
     api = getattr(data.instance, 'api', None)
@@ -223,12 +261,23 @@ async def send_via_qq_group(data: Message, zip_path: str):
 
     try:
         if data.is_direct:
-            await api.post_private_message(data.user_openid, payload)
+            res = await api.post_private_message(data.user_openid, payload)
         else:
-            await api.post_group_message(data.channel_openid, payload)
+            res = await api.post_group_message(data.channel_openid, payload)
     except Exception as e:
         log.error(f'QQ 群发送文件失败: {e}')
         return Chain(data).text(f'博士，QQ 群发送文件失败：{e}')
+
+    # 检查发送结果，失败时给出反馈
+    if res is not None:
+        if getattr(res, 'error', None):
+            log.error(f'QQ 群发送文件失败: {res.error}')
+            return Chain(data).text(f'博士，QQ 群发送文件失败：{res.error}')
+        body = getattr(res, 'json', None) if hasattr(res, 'json') else res
+        if isinstance(body, dict) and body.get('code', 0) != 0:
+            msg = body.get('message') or body.get('msg') or str(body)
+            log.error(f'QQ 群发送文件失败: {body}')
+            return Chain(data).text(f'博士，QQ 群发送文件失败：{msg}')
 
     return None
 
@@ -344,5 +393,18 @@ async def _(data: Message):
     await data.send(Chain(data).text(done_text))
     file_chain = await send_zip_file(data, zip_path)
     if file_chain:
-        await data.send(file_chain)
+        reason = None
+        try:
+            reason = send_result_error(await data.send(file_chain))
+        except Exception as e:
+            log.error(f'发送 JM{album_id} 文件消息失败: {e}')
+            reason = str(e)
+
+        if reason:
+            log.warning(f'发送 JM{album_id} 文件失败: {reason}')
+            await data.send(
+                Chain(data).text(
+                    f'博士，文件发送失败了：{reason}\n压缩包已保存在服务器：{zip_path}'
+                )
+            )
     return None

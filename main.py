@@ -1,8 +1,11 @@
 import os
 import re
 import sys
+import json
 import shutil
 import asyncio
+
+import aiohttp
 
 from typing import Optional
 
@@ -19,10 +22,13 @@ download_root = os.path.abspath(os.path.join(curr_dir, '..', '..', 'download', '
 # 文件发送失败自动重试：最多尝试次数、重试间隔（秒）
 FILE_SEND_MAX_ATTEMPTS = 3
 FILE_SEND_RETRY_DELAY = 5
+# OneBot v11 直连发送文件时的 HTTP 总超时（秒）。
+# 框架默认走 aiohttp 的 300 秒总超时，大文件上传 Highway 耗时容易超时被掐断，这里放宽到 10 分钟
+FILE_SEND_TIMEOUT = 600
 
 bot = AmiyaBotPluginInstance(
     name='JM漫画下载',
-    version='1.1.3',
+    version='1.1.4',
     plugin_id='siwu-jm-downloader',
     plugin_type='functional',
     description='通过输入 JM 编号（如 350234）下载禁漫本子，并打包为压缩包发送',
@@ -169,7 +175,7 @@ async def send_zip_file(data: Message, zip_path: str):
         if kind == 'qq_group':
             return await send_via_qq_group(data, zip_path)
         if kind == 'onebot_v11':
-            return send_via_onebot_v11(data, zip_path)
+            return await send_via_onebot_v11(data, zip_path)
         if kind == 'onebot_v12':
             return await send_via_onebot_v12(data, zip_path)
         if kind == 'mirai':
@@ -323,10 +329,78 @@ async def send_via_qq_group(data: Message, zip_path: str):
     return None
 
 
-def send_via_onebot_v11(data: Message, zip_path: str):
-    abs_path = os.path.abspath(zip_path).replace('\\', '/')
-    return Chain(data).extend(
-        {'type': 'file', 'data': {'file': 'file:///' + abs_path, 'name': os.path.basename(zip_path)}}
+async def send_via_onebot_v11(data: Message, zip_path: str) -> Optional[Chain]:
+    """OneBot v11 通道：直连 OneBot HTTP 接口发送文件段，失败自动重试。
+
+    不走框架的 data.send（其 HTTP 请求有默认 5 分钟总超时），改为直连并放宽到
+    FILE_SEND_TIMEOUT 秒，避免大文件上传耗时过长被超时掐断。
+    """
+    instance = data.instance
+    host = getattr(instance, 'host', None)
+    http_port = getattr(instance, 'http_port', None)
+    token = getattr(instance, 'token', None)
+    if not host or not http_port:
+        return Chain(data).text(f'博士，未找到 OneBot v11 接口地址。\n文件保存在：{zip_path}')
+
+    message = []
+    if not data.is_direct and data.user_id:
+        message.append({'type': 'at', 'data': {'qq': data.user_id}})
+    message.append(
+        {
+            'type': 'file',
+            'data': {
+                'file': 'file:///' + os.path.abspath(zip_path).replace('\\', '/'),
+                'name': os.path.basename(zip_path),
+            },
+        }
+    )
+    payload = {
+        'message_type': 'private' if data.is_direct else 'group',
+        'user_id': data.user_id,
+        'group_id': data.channel_id,
+        'message': message,
+    }
+    payload = {k: v for k, v in payload.items() if v is not None and v != ''}
+
+    url = f'http://{host}:{http_port}/send_msg'
+    headers = {'Content-Type': 'application/json'}
+    if token:
+        headers['Authorization'] = token
+
+    timeout = aiohttp.ClientTimeout(total=FILE_SEND_TIMEOUT)
+
+    reason = None
+    for attempt in range(1, FILE_SEND_MAX_ATTEMPTS + 1):
+        reason = None
+        try:
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.post(url, json=payload, headers=headers) as res:
+                    text = await res.text()
+                    status = res.status
+
+            if status >= 400:
+                reason = f'OneBot HTTP {status}: {text[:200]}'
+            else:
+                try:
+                    body = json.loads(text) if text else None
+                except json.JSONDecodeError:
+                    body = None
+                if isinstance(body, dict):
+                    if body.get('status') not in (None, 'ok', 'async') or body.get('retcode') not in (None, 0):
+                        reason = body.get('message') or body.get('msg') or str(body)
+        except Exception as e:
+            log.error(f'OneBot v11 发送文件请求异常: {e}')
+            reason = str(e)
+
+        if not reason:
+            return None
+
+        log.warning(f'OneBot v11 发送文件失败（第 {attempt}/{FILE_SEND_MAX_ATTEMPTS} 次）: {reason}')
+        if attempt < FILE_SEND_MAX_ATTEMPTS:
+            await asyncio.sleep(FILE_SEND_RETRY_DELAY)
+
+    return Chain(data).text(
+        f'博士，OneBot 发送文件失败了：{friendly_send_error(reason)}\n文件保存在：{zip_path}'
     )
 
 

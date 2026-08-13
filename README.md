@@ -53,7 +53,7 @@
 
 ## 安装方法
 
-1. 把 `siwu-jm-downloader-1.0.zip` 放到 `plugins/` 目录下（已为你打包好，含 jmcomic / pyzipper / Cryptodome）
+1. 把 `siwu-jm-downloader-<版本号>.zip`（例如 `siwu-jm-downloader-1.1.2.zip`）放到 `plugins/` 目录下（已为你打包好，含 jmcomic / pyzipper / Cryptodome）
 2. 重启兔兔即可自动加载
 
 ### 修改后重新打包

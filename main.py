@@ -16,9 +16,13 @@ if curr_dir not in sys.path:
     sys.path.insert(0, curr_dir)
 download_root = os.path.abspath(os.path.join(curr_dir, '..', '..', 'download', 'jmcomic'))
 
+# 文件发送失败自动重试：最多尝试次数、重试间隔（秒）
+FILE_SEND_MAX_ATTEMPTS = 3
+FILE_SEND_RETRY_DELAY = 5
+
 bot = AmiyaBotPluginInstance(
     name='JM漫画下载',
-    version='1.1.2',
+    version='1.1.3',
     plugin_id='siwu-jm-downloader',
     plugin_type='functional',
     description='通过输入 JM 编号（如 350234）下载禁漫本子，并打包为压缩包发送',
@@ -224,6 +228,43 @@ def send_result_error(result) -> Optional[str]:
     return None
 
 
+def friendly_send_error(reason: str) -> str:
+    """把底层发送错误翻译成用户能看懂的中文提示。"""
+    r = reason or ''
+    low = r.lower()
+    if '102902' in r:
+        return 'QQ 上传通道失败（102902），多为网络波动，请稍后重试'
+    if 'highway' in low:
+        return 'QQ 上传通道异常（多为网络波动），请稍后重试'
+    if 'timed out' in low or 'timeout' in low:
+        return '发送超时（网络延迟过高），请稍后重试'
+    if 'too large' in low or '文件过大' in r:
+        return '文件过大，超出 QQ 上传限制'
+    if 'not exist' in low or '不存在' in r:
+        return '文件不存在或已被移动'
+    return r
+
+
+async def send_file_with_retry(data: Message, file_chain: Chain, album_id: str) -> Optional[str]:
+    """发送文件，失败自动重试；全部失败时返回用户可读的失败原因，成功返回 None。"""
+    reason = None
+    for attempt in range(1, FILE_SEND_MAX_ATTEMPTS + 1):
+        try:
+            reason = send_result_error(await data.send(file_chain))
+        except Exception as e:
+            log.error(f'发送 JM{album_id} 文件消息失败: {e}')
+            reason = str(e)
+
+        if not reason:
+            return None
+
+        log.warning(f'发送 JM{album_id} 文件失败（第 {attempt}/{FILE_SEND_MAX_ATTEMPTS} 次）: {reason}')
+        if attempt < FILE_SEND_MAX_ATTEMPTS:
+            await asyncio.sleep(FILE_SEND_RETRY_DELAY)
+
+    return friendly_send_error(reason)
+
+
 async def send_via_qq_group(data: Message, zip_path: str):
     """QQ 群通道：上传文件获得 file_info，再用富媒体消息发送"""
     api = getattr(data.instance, 'api', None)
@@ -393,18 +434,12 @@ async def _(data: Message):
     await data.send(Chain(data).text(done_text))
     file_chain = await send_zip_file(data, zip_path)
     if file_chain:
-        reason = None
-        try:
-            reason = send_result_error(await data.send(file_chain))
-        except Exception as e:
-            log.error(f'发送 JM{album_id} 文件消息失败: {e}')
-            reason = str(e)
-
-        if reason:
-            log.warning(f'发送 JM{album_id} 文件失败: {reason}')
+        fail_reason = await send_file_with_retry(data, file_chain, album_id)
+        if fail_reason:
+            log.warning(f'发送 JM{album_id} 文件最终失败: {fail_reason}')
             await data.send(
                 Chain(data).text(
-                    f'博士，文件发送失败了：{reason}\n压缩包已保存在服务器：{zip_path}'
+                    f'博士，文件发送失败了：{fail_reason}\n压缩包已保存在服务器：{zip_path}'
                 )
             )
     return None

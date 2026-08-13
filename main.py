@@ -19,16 +19,18 @@ if curr_dir not in sys.path:
     sys.path.insert(0, curr_dir)
 download_root = os.path.abspath(os.path.join(curr_dir, '..', '..', 'download', 'jmcomic'))
 
-# 文件发送失败自动重试：最多尝试次数、重试间隔（秒）
+# 文件发送失败自动重试：最多尝试次数、重试间隔（秒）。
+# 102902 为 QQ Highway 服务端瞬时拒绝（风控/网络波动），间隔拉长到 30 秒，
+# 避免在风控窗口内连续撞墙。
 FILE_SEND_MAX_ATTEMPTS = 3
-FILE_SEND_RETRY_DELAY = 5
+FILE_SEND_RETRY_DELAY = 30
 # OneBot v11 直连发送文件时的 HTTP 总超时（秒）。
 # 框架默认走 aiohttp 的 300 秒总超时，大文件上传 Highway 耗时容易超时被掐断，这里放宽到 10 分钟
 FILE_SEND_TIMEOUT = 600
 
 bot = AmiyaBotPluginInstance(
     name='JM漫画下载',
-    version='1.1.4',
+    version='1.1.5',
     plugin_id='siwu-jm-downloader',
     plugin_type='functional',
     description='通过输入 JM 编号（如 350234）下载禁漫本子，并打包为压缩包发送',
